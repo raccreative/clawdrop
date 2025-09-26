@@ -27,6 +27,23 @@ impl CliUi {
         }
     }
 
+    fn format_bytes(bytes: u64) -> String {
+        const KB: f64 = 1024.0;
+        const MB: f64 = KB * 1024.0;
+        const GB: f64 = MB * 1024.0;
+
+        let b = bytes as f64;
+        if b >= GB {
+            format!("{:.1} GB", b / GB)
+        } else if b >= MB {
+            format!("{:.1} MB", b / MB)
+        } else if b >= KB {
+            format!("{:.1} KB", b / KB)
+        } else {
+            format!("{} B", bytes)
+        }
+    }
+
     pub fn set_status(&self, msg: &str) {
         self.finish_status();
         *self.current_msg.lock().unwrap() = msg.to_string();
@@ -36,7 +53,7 @@ impl CliUi {
         io::stdout().flush().unwrap();
     }
 
-    pub fn show_progress(&self, progress: usize, total: usize, msg: &str) {
+    pub fn show_progress_count(&self, done: usize, total: usize, msg: &str) {
         self.progress_active.store(true, Ordering::Relaxed);
 
         let mut first_time = false;
@@ -53,15 +70,62 @@ impl CliUi {
             io::stdout().flush().unwrap();
         }
 
-        let filled = (progress * self.width) / total;
+        let percent = if total > 0 {
+            done as f64 * 100.0 / total as f64
+        } else {
+            0.0
+        };
+        let filled = ((done * self.width) / total).min(self.width);
         let empty = self.width - filled;
-        let percent = (progress * 100) / total;
 
         let bar = format!(
-            "[\x1b[32m{filled_blocks}\x1b[0m{empty_blocks}] {percent}%",
+            "[\x1b[32m{filled_blocks}\x1b[0m{empty_blocks}] {percent:>5.1}%  {done} / {total}",
             filled_blocks = "█".repeat(filled),
             empty_blocks = "░".repeat(empty),
-            percent = percent
+            percent = percent,
+            done = done,
+            total = total,
+        );
+
+        print!("\r\x1b[2K{}", bar);
+        io::stdout().flush().unwrap();
+    }
+
+    pub fn show_progress_bytes(&self, progress: u64, total: u64, msg: &str, speed: Option<u64>) {
+        self.progress_active.store(true, Ordering::Relaxed);
+
+        let mut first_time = false;
+        {
+            let mut prog_msg = self.progress_msg.lock().unwrap();
+            if *prog_msg != msg {
+                *prog_msg = msg.to_string();
+                first_time = true;
+            }
+        }
+
+        if first_time {
+            println!("{}", msg);
+            io::stdout().flush().unwrap();
+        }
+
+        let percent = (total != 0)
+            .then(|| progress as f64 * 100.0 / total as f64)
+            .unwrap_or(0.0);
+        let filled = ((progress * self.width as u64) / total) as usize;
+        let empty = self.width.saturating_sub(filled);
+
+        let speed_str = speed
+            .map(|s| format!("  ({}/s)", CliUi::format_bytes(s)))
+            .unwrap_or_default();
+
+        let bar = format!(
+            "[\x1b[32m{filled_blocks}\x1b[0m{empty_blocks}] {percent:>5.1}%  {done} / {total}{speed}",
+            filled_blocks = "█".repeat(filled),
+            empty_blocks = "░".repeat(empty),
+            percent = percent,
+            done = CliUi::format_bytes(progress as u64),
+            total = CliUi::format_bytes(total as u64),
+            speed = speed_str
         );
 
         print!("\r\x1b[2K{}", bar);

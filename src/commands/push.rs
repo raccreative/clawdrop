@@ -1,6 +1,6 @@
 use std::{
     path::Path,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use aws_sdk_s3::config::{Credentials, Region};
@@ -397,18 +397,30 @@ async fn upload_files_if_any(
         return Ok(());
     }
 
-    ui.show_progress(0, total, "Uploading files");
-
-    let mut done = 0;
+    let mut prepared_files = Vec::with_capacity(files_to_upload.len());
+    let mut total_bytes: u64 = 0;
 
     for entry in files_to_upload {
-        let key = format!("{}{}", prefix, entry.path);
-
         let local_path = base_path.join(&entry.path);
+        let meta = std::fs::metadata(&local_path)?;
+        let size = meta.len();
+
+        total_bytes += size;
+        prepared_files.push((entry.path.clone(), local_path, size));
+    }
+
+    let mut done_bytes: u64 = 0;
+    let start = Instant::now();
+
+    ui.show_progress_bytes(0, total_bytes, "Uploading files", None);
+
+    for (file_path, local_path, size) in prepared_files {
+        let key = format!("{}{}", prefix, file_path);
+
         let body = aws_sdk_s3::primitives::ByteStream::from_path(&local_path)
             .await
             .map_err(|e| PushError::S3Error {
-                message: format!("Failed to read local file {}: {:?}", entry.path, e),
+                message: format!("Failed to read local file {}: {:?}", file_path, e),
             })?;
 
         s3_client
@@ -420,11 +432,14 @@ async fn upload_files_if_any(
             .send()
             .await
             .map_err(|e| PushError::S3Error {
-                message: format!("Failed uploading {}: {:?}", entry.path, e),
+                message: format!("Failed uploading {}: {:?}", file_path, e),
             })?;
 
-        done += 1;
-        ui.show_progress(done, total, "Uploading files");
+        done_bytes += size;
+        let elapsed = start.elapsed().as_secs_f64();
+        let speed = (elapsed > 0.0).then(|| (done_bytes as f64 / elapsed) as u64);
+
+        ui.show_progress_bytes(done_bytes, total_bytes, "Uploading files", speed);
     }
 
     ui.finish_progress();
@@ -443,7 +458,7 @@ async fn delete_files_if_any(
         return Ok(());
     }
 
-    ui.show_progress(0, total, "Deleting remote obsolete files");
+    ui.show_progress_count(0, total, "Deleting remote obsolete files");
     let mut deleted_done = 0;
 
     for entry in files_to_delete {
@@ -460,7 +475,7 @@ async fn delete_files_if_any(
             })?;
 
         deleted_done += 1;
-        ui.show_progress(deleted_done, total, "Deleting remote obsolete files");
+        ui.show_progress_count(deleted_done, total, "Deleting remote obsolete files");
     }
 
     ui.finish_progress();
