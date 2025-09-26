@@ -1,11 +1,13 @@
 use std::{
     path::Path,
+    sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use aws_sdk_s3::config::{Credentials, Region};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 
 use crate::{
     constants::{COMPLETE_PUSH_URL, REQUEST_UPLOAD_URL, VERIFY_UPLOAD_URL},
@@ -393,50 +395,71 @@ async fn upload_files_if_any(
     bucket: &String,
     base_path: &Path,
 ) -> Result<(), PushError> {
-    if total <= 0 {
+    if total == 0 {
         return Ok(());
     }
 
     let mut prepared_files = Vec::with_capacity(files_to_upload.len());
     let mut total_bytes: u64 = 0;
-
     for entry in files_to_upload {
         let local_path = base_path.join(&entry.path);
-        let meta = std::fs::metadata(&local_path)?;
-        let size = meta.len();
-
+        let size = std::fs::metadata(&local_path)?.len();
         total_bytes += size;
         prepared_files.push((entry.path.clone(), local_path, size));
     }
 
+    ui.show_progress_bytes(0, total_bytes, "Uploading files", None);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(prepared_files.len());
+    let concurrency = 8;
+    let sem = Arc::new(Semaphore::new(concurrency));
+
+    // Spawn concurrent tasks
+    for (file_path, local_path, size) in prepared_files {
+        let s3_client = s3_client.clone();
+        let bucket = bucket.clone();
+        let key = format!("{}{}", prefix, file_path);
+        let tx = tx.clone();
+        let sem = sem.clone();
+
+        tokio::spawn(async move {
+            let _permit = sem.acquire_owned().await.unwrap();
+
+            let body = aws_sdk_s3::primitives::ByteStream::from_path(&local_path)
+                .await
+                .map_err(|e| PushError::S3Error {
+                    message: format!("Failed to read {}: {:?}", file_path, e),
+                })?;
+
+            s3_client
+                .put_object()
+                .bucket(&bucket)
+                .key(&key)
+                .checksum_algorithm(aws_sdk_s3::types::ChecksumAlgorithm::Sha256)
+                .body(body)
+                .send()
+                .await
+                .map_err(|e| PushError::S3Error {
+                    message: format!("Failed uploading {}: {:?}", file_path, e),
+                })?;
+
+            // Send progress to main thread
+            tx.send(size).await.unwrap();
+
+            Ok::<(), PushError>(())
+        });
+    }
+
+    drop(tx);
+
+    // Update UI from main thread while results arrive
     let mut done_bytes: u64 = 0;
     let start = Instant::now();
 
-    ui.show_progress_bytes(0, total_bytes, "Uploading files", None);
-
-    for (file_path, local_path, size) in prepared_files {
-        let key = format!("{}{}", prefix, file_path);
-
-        let body = aws_sdk_s3::primitives::ByteStream::from_path(&local_path)
-            .await
-            .map_err(|e| PushError::S3Error {
-                message: format!("Failed to read local file {}: {:?}", file_path, e),
-            })?;
-
-        s3_client
-            .put_object()
-            .bucket(bucket)
-            .key(key)
-            .checksum_algorithm(aws_sdk_s3::types::ChecksumAlgorithm::Sha256)
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| PushError::S3Error {
-                message: format!("Failed uploading {}: {:?}", file_path, e),
-            })?;
-
-        done_bytes += size;
+    while let Some(uploaded) = rx.recv().await {
+        done_bytes += uploaded;
         let elapsed = start.elapsed().as_secs_f64();
+        // Speed could be inaccurate... But will be solved when delta-patching is implemented
         let speed = (elapsed > 0.0).then(|| (done_bytes as f64 / elapsed) as u64);
 
         ui.show_progress_bytes(done_bytes, total_bytes, "Uploading files", speed);
