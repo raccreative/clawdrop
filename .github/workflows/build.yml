@@ -10,7 +10,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
@@ -41,19 +40,23 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir dist
+          set BIN_NAME=clawdrop
+          copy target\${{ matrix.target }}\release\%BIN_NAME%.exe dist\
+          copy LICENSE dist\
+          powershell Compress-Archive -Path dist\* -DestinationPath dist\%BIN_NAME%-${{ matrix.target }}.zip
+
+      - name: Package binary (Unix)
+        if: matrix.os != 'windows-latest'
         run: |
           mkdir -p dist
           BIN_NAME=clawdrop
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            cp target/${{ matrix.target }}/release/${BIN_NAME}.exe dist/
-            cp LICENSE dist/
-            zip -j dist/${BIN_NAME}-${{ matrix.target }}.zip dist/${BIN_NAME}.exe LICENSE
-          else
-            cp target/${{ matrix.target }}/release/${BIN_NAME} dist/
-            cp LICENSE dist/
-            tar -czf dist/${BIN_NAME}-${{ matrix.target }}.tar.gz -C dist ${BIN_NAME} LICENSE
-          fi
+          cp target/${{ matrix.target }}/release/${BIN_NAME} dist/
+          cp LICENSE dist/
+          tar -czf dist/${BIN_NAME}-${{ matrix.target }}.tar.gz -C dist ${BIN_NAME} LICENSE
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
