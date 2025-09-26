@@ -42,12 +42,13 @@ jobs:
 
       - name: Package binary (Windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          mkdir dist
-          set BIN_NAME=clawdrop
-          copy target\${{ matrix.target }}\release\%BIN_NAME%.exe dist\
-          copy LICENSE dist\
-          powershell Compress-Archive -Path dist\* -DestinationPath dist\%BIN_NAME%-${{ matrix.target }}.zip
+          $BIN_NAME = "clawdrop"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/$BIN_NAME.exe" dist/
+          Copy-Item "LICENSE" dist/
+          Compress-Archive -Path dist/* -DestinationPath "dist/$BIN_NAME-${{ matrix.target }}.zip" -Force
 
       - name: Package binary (Unix)
         if: matrix.os != 'windows-latest'
