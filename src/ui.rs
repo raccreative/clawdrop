@@ -134,7 +134,7 @@ impl CliUi {
 
     pub fn finish_progress(&self) {
         self.progress_active.store(false, Ordering::Relaxed);
-        println!(" {}", green!("✔"));
+        println!(" {}", green!("✓"));
         io::stdout().flush().unwrap();
     }
 
@@ -142,7 +142,7 @@ impl CliUi {
         let prev = self.current_msg.lock().unwrap().clone();
         if !prev.is_empty() {
             self.spinner_active.store(false, Ordering::Relaxed);
-            print!("\r\x1b[2K{} {}\n", green!("✔"), prev);
+            print!("\r\x1b[2K{} {}\n", green!("✓"), prev);
             io::stdout().flush().unwrap();
         }
     }
@@ -203,7 +203,7 @@ impl SpinnerHandle {
 
         let msg = self.msg_ref.lock().unwrap().clone();
         if !msg.is_empty() {
-            print!("\r\x1b[2K{} {}\n", green!("✔"), msg);
+            print!("\r\x1b[2K{} {}\n", green!("✓"), msg);
             io::stdout().flush().unwrap();
         }
     }
